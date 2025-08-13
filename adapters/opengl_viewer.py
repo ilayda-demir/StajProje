@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import QOpenGLWidget
-from PyQt5.QtGui import QSurfaceFormat
+from PyQt5.QtCore import Qt
 from OpenGL.GL import *
+from OpenGL.GLU import gluPerspective
 import numpy as np
 
 
@@ -10,6 +11,16 @@ class OpenGLViewer(QOpenGLWidget):
         self.vertices = None
         self.faces = None
 
+        # Dönüş ve zoom değişkenleri
+        self.rotation_x = 0.0
+        self.rotation_y = 0.0
+        self.rotation_z = 0.0
+        self.zoom_distance = -5.0  # ⬅️ Burada tanımlanmalı
+
+        self.last_mouse_pos = None
+
+        self.setFocusPolicy(Qt.StrongFocus)  # ⬅️ Wheel event için odak almalı
+
     def load_model_data(self, vertices, faces):
         # Normalize: merkeze getir ve uygun boyuta ölçekle
         vertices = np.array(vertices)
@@ -17,17 +28,21 @@ class OpenGLViewer(QOpenGLWidget):
         max_coords = vertices.max(axis=0)
         center = (min_coords + max_coords) / 2
         scale = np.linalg.norm(max_coords - min_coords)
+        if scale == 0:
+            scale = 1.0
 
-        # Taşı ve ölçekle
         normalized = (vertices - center) / scale * 2.0
 
         self.vertices = normalized
         self.faces = faces
         self.update()
 
-        self.last_mouse_pos = None
+        # Sıfırla
         self.rotation_x = 0.0
         self.rotation_y = 0.0
+        self.rotation_z = 0.0
+        self.zoom_distance = -5.0
+        self.last_mouse_pos = None
 
     def initializeGL(self):
         glClearColor(0.2, 0.2, 0.2, 1.0)
@@ -38,16 +53,23 @@ class OpenGLViewer(QOpenGLWidget):
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
         aspect = w / h if h != 0 else 1
-        glOrtho(-1 * aspect, 1 * aspect, -1, 1, -10, 10)
+        gluPerspective(45.0, aspect, 0.1, 100.0)  # Perspektif projeksiyon
         glMatrixMode(GL_MODELVIEW)
 
     def paintGL(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
-        glTranslatef(0.0, 0.0, -5.0)
+
+        # Zoom (kamera uzaklığı)
+        glTranslatef(0.0, 0.0, self.zoom_distance)
+
+        # Döndürmeler
+        glRotatef(self.rotation_x, 1.0, 0.0, 0.0)
+        glRotatef(self.rotation_y, 0.0, 1.0, 0.0)
+        glRotatef(self.rotation_z, 0.0, 0.0, 1.0)
 
         if self.vertices is not None and self.faces is not None:
-            glColor3f(0.0, 0.6, 1.0)  # Model rengi: mavi
+            glColor3f(0.0, 0.6, 1.0)
             glBegin(GL_TRIANGLES)
             for face in self.faces:
                 for idx in face:
@@ -62,9 +84,20 @@ class OpenGLViewer(QOpenGLWidget):
         if self.last_mouse_pos is not None:
             dx = event.x() - self.last_mouse_pos.x()
             dy = event.y() - self.last_mouse_pos.y()
-            self.rotation_x += dy * 0.5
-            self.rotation_y += dx * 0.5
+
+            if event.buttons() & Qt.LeftButton:
+                self.rotation_x += dy * 0.5
+                self.rotation_y += dx * 0.5
+
+            elif event.buttons() & Qt.RightButton:
+                self.rotation_z += dx * 0.5
+
             self.last_mouse_pos = event.pos()
             self.update()
 
-
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        print("Zoom:", delta)  # Debug için
+        self.zoom_distance += delta * 0.01  # ⬅️ Daha etkili zoom
+        self.zoom_distance = max(-50.0, min(-1.0, self.zoom_distance))
+        self.update()
