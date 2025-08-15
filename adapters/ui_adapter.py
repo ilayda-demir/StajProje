@@ -1,17 +1,14 @@
 # adapters/ui_adapter.py
 from PyQt5.QtWidgets import (
     QMainWindow, QPushButton, QVBoxLayout, QWidget, QFileDialog,
-    QHBoxLayout, QComboBox, QMessageBox
+    QHBoxLayout, QComboBox, QMessageBox, QLabel, QSlider, QDoubleSpinBox
 )
 from PyQt5.QtCore import Qt
 
 from adapters.opengl_viewer import OpenGLViewer
 from core.section_service import SectionService
 
-# ⬇️ ESKİ import (HATALI) → from workers.model_loader_worker import ModelLoaderWorker
-# ⬇️ YENİ: ayrı process ile donmasız yükleme
 from workers.process_model_loader_worker import ProcessModelLoaderWorker
-# Kesiti arka planda hesaplamak için
 from workers.section_worker import SectionWorker
 
 
@@ -27,11 +24,10 @@ class MainWindow(QMainWindow):
         self._picked_normal = None
         self._axis = "z"
 
-        # Worker referansları
-        self._proc_loader = None   # ProcessModelLoaderWorker
-        self._sec_worker = None    # SectionWorker
+        self._proc_loader = None
+        self._sec_worker = None
 
-        # --- UI öğeleri ---
+        # --- Üst bar ---
         self.load_button = QPushButton("3D Model Yükle")
         self.load_button.clicked.connect(self.load_model)
 
@@ -40,20 +36,37 @@ class MainWindow(QMainWindow):
         self.axis_combo.setCurrentText("z")
         self.axis_combo.currentTextChanged.connect(self._on_axis_changed)
 
-        self.pick_info = QPushButton("Nokta Seç (Ctrl + Sol Tık)")
-        self.pick_info.setEnabled(False)  # sadece bilgi
-
         self.slice_button = QPushButton("Kesit Al")
         self.slice_button.clicked.connect(self.compute_section)
 
         self.export_button = QPushButton("TXT'ye Aktar")
         self.export_button.clicked.connect(self.export_txt)
 
+        # --- Şeffaflık kontrolü (üst barda) ---
+        self.alpha_label = QLabel("Şeffaflık:")
+        self.alpha_spin = QDoubleSpinBox()
+        self.alpha_spin.setRange(0.0, 1.0)
+        self.alpha_spin.setDecimals(2)
+        self.alpha_spin.setSingleStep(0.05)
+        self.alpha_spin.setValue(self.viewer.mesh_alpha)
+
+        self.alpha_slider = QSlider(Qt.Horizontal)
+        self.alpha_slider.setRange(0, 100)
+        self.alpha_slider.setFixedWidth(110)
+        self.alpha_slider.setValue(int(round(self.viewer.mesh_alpha * 100)))
+
+        self.alpha_spin.valueChanged.connect(self._on_alpha_spin_changed)
+        self.alpha_slider.valueChanged.connect(self._on_alpha_slider_changed)
+
         topbar = QHBoxLayout()
         topbar.addWidget(self.load_button)
         topbar.addWidget(self.axis_combo)
         topbar.addWidget(self.slice_button)
         topbar.addWidget(self.export_button)
+        topbar.addSpacing(12)
+        topbar.addWidget(self.alpha_label)
+        topbar.addWidget(self.alpha_spin)
+        topbar.addWidget(self.alpha_slider)
         topbar.addStretch(1)
 
         layout = QVBoxLayout()
@@ -64,11 +77,11 @@ class MainWindow(QMainWindow):
         container.setLayout(layout)
         self.setCentralWidget(container)
 
-        # Viewer içi tıklama: Ctrl+LMB ile pick
+        # Ctrl + Sol Tık ile pick
         self.viewer.mousePressEvent = self._wrap_mouse_press(self.viewer.mousePressEvent)
 
-        # Ok tuşları ile nişangâh
-        self._aim_px = None   # (mx, my) piksel
+        # Ok tuşları ile nişangâh (altyapı korunuyor)
+        self._aim_px = None
         self._aim_step = 2
         self._hook_viewer_keypress()
 
@@ -76,18 +89,14 @@ class MainWindow(QMainWindow):
     def _wrap_mouse_press(self, original_handler):
         def handler(event):
             if (event.buttons() & Qt.LeftButton) and (event.modifiers() & Qt.ControlModifier):
-                # 1) Piksel-eksiksiz: derinlikten oku
                 p_depth = self.viewer.pick_point_from_qt(event.pos())
                 if p_depth is not None:
-                    # Normal şart değil; sadece görsel için nokta yeterli.
-                    # İstersen projeksiyon tabanlı normal de alabilirsin (aşağıdaki fallback ile).
                     self._picked_point = p_depth
                     self._picked_normal = None
                     self.viewer.set_pick_point(p_depth, normal=None)
                     event.accept()
                     return
 
-                # 2) Fallback: projeksiyon tabanlı barycentrik (hit bulamazsa diye)
                 vp = self.viewer._cached_vp
                 MV = self.viewer._cached_model
                 P = self.viewer._cached_proj
@@ -111,11 +120,24 @@ class MainWindow(QMainWindow):
                 return
 
             return original_handler(event)
-
         return handler
 
     def _on_axis_changed(self, s):
         self._axis = s.lower()
+
+    # ---------------- Şeffaflık sync ----------------
+    def _on_alpha_spin_changed(self, val: float):
+        self.viewer.set_mesh_alpha(float(val))
+        self.alpha_slider.blockSignals(True)
+        self.alpha_slider.setValue(int(round(float(val) * 100)))
+        self.alpha_slider.blockSignals(False)
+
+    def _on_alpha_slider_changed(self, v: int):
+        a = v / 100.0
+        self.viewer.set_mesh_alpha(a)
+        self.alpha_spin.blockSignals(True)
+        self.alpha_spin.setValue(a)
+        self.alpha_spin.blockSignals(False)
 
     # ---------------- Model Load (Process) ----------------
     def load_model(self):
@@ -126,7 +148,6 @@ class MainWindow(QMainWindow):
         self.load_button.setEnabled(False)
         print("[DBG] load_model: seçilen dosya:", file_path)
 
-        # Ayrı PROCESS ile yükle → UI donmaz
         self._proc_loader = ProcessModelLoaderWorker(file_path)
         self._proc_loader.loaded.connect(self._on_model_loaded)
         self._proc_loader.error.connect(self._on_model_load_error)
@@ -136,7 +157,6 @@ class MainWindow(QMainWindow):
         print("[DBG] on_model_loaded: V/F alındı → viewer’a aktarılıyor")
         self.viewer.load_model_data(vertices, faces)
 
-        # Önceki seçim/kesitleri sıfırla
         self._picked_point = None
         self._picked_normal = None
         self.viewer.set_pick_point(None)
@@ -157,7 +177,6 @@ class MainWindow(QMainWindow):
             return
 
         self.slice_button.setEnabled(False)
-        # Kesiti arka planda hesapla
         self._sec_worker = SectionWorker(
             self.viewer.vertices, self.viewer.faces, self._picked_point, self._axis
         )
@@ -175,16 +194,25 @@ class MainWindow(QMainWindow):
         self.slice_button.setEnabled(True)
         self._sec_worker = None
 
-    # ---------------- Export ----------------
+    # ---------------- TXT export ----------------
     def export_txt(self):
         if not getattr(self.viewer, "_section_paths", []):
+            QMessageBox.information(self, "Bilgi", "Kesit verisi yok.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "TXT kaydet", "", "Metin Dosyası (*.txt)")
-        if not path:
+        file_path, _ = QFileDialog.getSaveFileName(self, "TXT olarak kaydet", "", "Metin Dosyası (*.txt)")
+        if not file_path:
             return
-        SectionService.export_paths(self.viewer._section_paths, path)
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                for poly in self.viewer._section_paths:
+                    for p in poly:
+                        f.write(f"{p[0]:.4f}, {p[1]:.4f}, {p[2]:.4f}\n")
+                    f.write("\n")
+            QMessageBox.information(self, "Başarılı", "TXT olarak kaydedildi.")
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"Kaydedilemedi: {e}")
 
-    # ---------------- Aim helpers ----------------
+    # ---------------- Aim helpers (mevcut davranış) ----------------
     def _ensure_aim_center(self):
         vp = self.viewer._cached_vp
         if vp is None:
@@ -218,7 +246,7 @@ class MainWindow(QMainWindow):
         elif ev.key() == Qt.Key_Right:
             mx += step
         elif ev.key() == Qt.Key_Up:
-            my += step  # alt-orijin -> yukarı artar
+            my += step
         elif ev.key() == Qt.Key_Down:
             my -= step
         elif ev.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
@@ -250,13 +278,13 @@ class MainWindow(QMainWindow):
             elif k == Qt.Key_Right:
                 mx += step
             elif k == Qt.Key_Up:
-                my += step  # bottom-left origin
+                my += step
             elif k == Qt.Key_Down:
                 my -= step
             elif k in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
                 self._select_at_screen_px(mx, my)
                 return
-            elif k == Qt.Key_C:  # merkeze sıfırla
+            elif k == Qt.Key_C:
                 self._ensure_aim_center()
                 mx, my = self._aim_px
                 self._select_at_screen_px(mx, my)
@@ -264,7 +292,6 @@ class MainWindow(QMainWindow):
             else:
                 return original(ev)
 
-            # viewport sınırlarına sıkıştır
             vx, vy, vw, vh = map(int, self.viewer._cached_vp)
             mx = max(vx, min(vx + vw - 1, int(mx)))
             my = max(vy, min(vy + vh - 1, int(my)))
@@ -273,26 +300,3 @@ class MainWindow(QMainWindow):
             self._select_at_screen_px(mx, my)
 
         self.viewer.keyPressEvent = on_key
-
-    # ---------------- Temiz kapanış ----------------
-    def closeEvent(self, event):
-        try:
-            if self._proc_loader is not None:
-                try:
-                    self._proc_loader.cancel()
-                except Exception:
-                    pass
-                self._proc_loader.wait()
-                self._proc_loader = None
-        except Exception:
-            pass
-
-        try:
-            if self._sec_worker is not None:
-                self._sec_worker.quit()
-                self._sec_worker.wait()
-                self._sec_worker = None
-        except Exception:
-            pass
-
-        super().closeEvent(event)
