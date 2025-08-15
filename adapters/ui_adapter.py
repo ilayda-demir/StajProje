@@ -76,14 +76,25 @@ class MainWindow(QMainWindow):
     def _wrap_mouse_press(self, original_handler):
         def handler(event):
             if (event.buttons() & Qt.LeftButton) and (event.modifiers() & Qt.ControlModifier):
+                # 1) Piksel-eksiksiz: derinlikten oku
+                p_depth = self.viewer.pick_point_from_qt(event.pos())
+                if p_depth is not None:
+                    # Normal şart değil; sadece görsel için nokta yeterli.
+                    # İstersen projeksiyon tabanlı normal de alabilirsin (aşağıdaki fallback ile).
+                    self._picked_point = p_depth
+                    self._picked_normal = None
+                    self.viewer.set_pick_point(p_depth, normal=None)
+                    event.accept()
+                    return
+
+                # 2) Fallback: projeksiyon tabanlı barycentrik (hit bulamazsa diye)
                 vp = self.viewer._cached_vp
                 MV = self.viewer._cached_model
-                P  = self.viewer._cached_proj
+                P = self.viewer._cached_proj
                 if vp is None or MV is None or P is None:
                     event.accept()
                     return
 
-                # Qt → window pixel (bottom-left origin)
                 dpr = float(self.viewer.devicePixelRatioF())
                 mx = event.pos().x() * dpr
                 my = (float(vp[3]) - 1.0) - (event.pos().y() * dpr)
@@ -98,7 +109,9 @@ class MainWindow(QMainWindow):
                     self.viewer.set_pick_point(p_draw, normal=normal)
                 event.accept()
                 return
+
             return original_handler(event)
+
         return handler
 
     def _on_axis_changed(self, s):

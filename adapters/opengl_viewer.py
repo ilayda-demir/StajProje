@@ -6,6 +6,8 @@ from PyQt5.QtGui import QSurfaceFormat
 from OpenGL.GL import *
 from OpenGL.GLU import gluPerspective  # GLU perspektif için
 import numpy as np
+from OpenGL.GLU import gluPerspective, gluUnProject  # ← gluUnProject eklendi
+
 
 
 class OpenGLViewer(QOpenGLWidget):
@@ -301,3 +303,40 @@ class OpenGLViewer(QOpenGLWidget):
             return None, None
         dir_obj /= m
         return origin_obj, dir_obj
+
+    def pick_point_from_qt(self, qpoint):
+        """
+        Ekranda tıklanan Qt noktası için derinlik tamponundan z okur ve
+        gluUnProject ile tam 3B noktasını döner. Hit yoksa None.
+        """
+        MV = self._cached_model
+        P = self._cached_proj
+        vp = self._cached_vp
+        if MV is None or P is None or vp is None:
+            return None
+
+        # Qt (DIP, üst-sol) -> window pixel (alt-sol)
+        dpr = float(self.devicePixelRatioF())
+        wx = qpoint.x() * dpr
+        wy = (float(vp[3]) - 1.0) - (qpoint.y() * dpr)
+
+        # GL context'i şu anda paintGL dışında; bu yüzden geçici olarak current yap
+        self.makeCurrent()
+        try:
+            glPixelStorei(GL_PACK_ALIGNMENT, 1)
+            ix, iy = int(round(wx)), int(round(wy))
+            depth = glReadPixels(ix, iy, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT)
+            if depth is None:
+                return None
+            z = float(depth[0][0]) if hasattr(depth, "__getitem__") else float(depth)
+
+            # z=1.0 → arka plan (hit yok)
+            if z >= 1.0 - 1e-6:
+                return None
+
+            # Tam 3B pozisyon
+            x, y, z = gluUnProject(wx, wy, z, MV, P, vp)
+            return np.array([x, y, z], dtype=np.float64)
+        finally:
+            self.doneCurrent()
+
