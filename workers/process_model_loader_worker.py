@@ -3,6 +3,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 from multiprocessing import Process, Pipe
 import numpy as np
 import tempfile, os, traceback
+import os, tempfile
 
 def _child_load(file_path, conn):
     try:
@@ -16,7 +17,11 @@ def _child_load(file_path, conn):
         V = loader.get_vertices()  # normalized
         F = loader.get_faces()
 
-        tmp = tempfile.NamedTemporaryFile(prefix="mesh_", suffix=".npz", delete=False)
+        # D diski üzerinde temp klasörü kullan
+        TMP_DIR = r"D:\temp"
+        os.makedirs(TMP_DIR, exist_ok=True)
+
+        tmp = tempfile.NamedTemporaryFile(prefix="mesh_", suffix=".npz", dir=TMP_DIR, delete=False)
         tmp_path = tmp.name
         tmp.close()
         np.savez_compressed(tmp_path, V=V, F=F)

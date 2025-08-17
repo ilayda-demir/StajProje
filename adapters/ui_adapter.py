@@ -1,4 +1,13 @@
 # adapters/ui_adapter.py
+
+# en üst importlara ekleyin:
+from core.use_cases import LoadModelUseCase, PickPointUseCase, ComputeSectionUseCase, ExportSectionUseCase
+from core.ports import ViewerPort, SectionComputerPort, SectionExporterPort, ModelLoaderPort
+from adapters.viewer_adapter import QtViewerAdapter
+from adapters.section_adapter import TrimeshSectionAdapter
+from adapters.txt_exporter import TxtExporter
+from adapters.model_loader_adapter import TrimeshModelLoaderAdapter
+
 from PyQt5.QtWidgets import (
     QMainWindow, QPushButton, QVBoxLayout, QWidget, QFileDialog,
     QHBoxLayout, QComboBox, QMessageBox, QLabel, QSlider, QDoubleSpinBox
@@ -19,6 +28,18 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 900, 700)
 
         self.viewer = OpenGLViewer()
+        # Ports / Adapters
+        self.viewer_port: ViewerPort = QtViewerAdapter(self.viewer)
+        self.section_port: SectionComputerPort = TrimeshSectionAdapter()
+        self.exporter_port: SectionExporterPort = TxtExporter()
+        self.loader_port: ModelLoaderPort = TrimeshModelLoaderAdapter()
+
+        # Use-cases
+        self.uc_load = LoadModelUseCase(self.loader_port, self.viewer_port)
+        self.uc_pick = PickPointUseCase(self.viewer_port)
+        self.uc_section = ComputeSectionUseCase(self.section_port, self.viewer_port)
+        self.uc_export = ExportSectionUseCase(self.exporter_port)
+
         self.section = SectionService()
         self._picked_point = None
         self._picked_normal = None
@@ -73,6 +94,8 @@ class MainWindow(QMainWindow):
         layout.addLayout(topbar)
         layout.addWidget(self.viewer)
 
+
+
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
@@ -80,10 +103,7 @@ class MainWindow(QMainWindow):
         # Ctrl + Sol Tık ile pick
         self.viewer.mousePressEvent = self._wrap_mouse_press(self.viewer.mousePressEvent)
 
-        # Ok tuşları ile nişangâh (altyapı korunuyor)
-        self._aim_px = None
-        self._aim_step = 2
-        self._hook_viewer_keypress()
+
 
     # ---------------- UI Events ----------------
     def _wrap_mouse_press(self, original_handler):
@@ -93,7 +113,8 @@ class MainWindow(QMainWindow):
                 if p_depth is not None:
                     self._picked_point = p_depth
                     self._picked_normal = None
-                    self.viewer.set_pick_point(p_depth, normal=None)
+                    self.uc_pick(p_depth, None)
+
                     event.accept()
                     return
 
@@ -115,7 +136,8 @@ class MainWindow(QMainWindow):
                 if p_surface is not None:
                     self._picked_point = p_surface
                     self._picked_normal = normal
-                    self.viewer.set_pick_point(p_draw, normal=normal)
+                    self.uc_pick(p_draw, normal)
+
                 event.accept()
                 return
 
@@ -125,16 +147,15 @@ class MainWindow(QMainWindow):
     def _on_axis_changed(self, s):
         self._axis = s.lower()
 
-    # ---------------- Şeffaflık sync ----------------
     def _on_alpha_spin_changed(self, val: float):
-        self.viewer.set_mesh_alpha(float(val))
+        self.viewer_port.set_alpha(float(val))
         self.alpha_slider.blockSignals(True)
         self.alpha_slider.setValue(int(round(float(val) * 100)))
         self.alpha_slider.blockSignals(False)
 
     def _on_alpha_slider_changed(self, v: int):
         a = v / 100.0
-        self.viewer.set_mesh_alpha(a)
+        self.viewer_port.set_alpha(a)
         self.alpha_spin.blockSignals(True)
         self.alpha_spin.setValue(a)
         self.alpha_spin.blockSignals(False)
@@ -155,12 +176,10 @@ class MainWindow(QMainWindow):
 
     def _on_model_loaded(self, vertices, faces):
         print("[DBG] on_model_loaded: V/F alındı → viewer’a aktarılıyor")
-        self.viewer.load_model_data(vertices, faces)
-
+        self.viewer_port.show_mesh(vertices, faces)
         self._picked_point = None
         self._picked_normal = None
-        self.viewer.set_pick_point(None)
-        self.viewer.set_section_paths([])
+        self.viewer_port.clear_pick_and_sections()
 
         self.load_button.setEnabled(True)
         self._proc_loader = None
@@ -185,7 +204,7 @@ class MainWindow(QMainWindow):
         self._sec_worker.start()
 
     def _on_section_done(self, paths):
-        self.viewer.set_section_paths(paths)
+        self.viewer_port.show_sections(paths)
         self.slice_button.setEnabled(True)
         self._sec_worker = None
 
@@ -194,109 +213,24 @@ class MainWindow(QMainWindow):
         self.slice_button.setEnabled(True)
         self._sec_worker = None
 
-    # ---------------- TXT export ----------------
     def export_txt(self):
-        if not getattr(self.viewer, "_section_paths", []):
+        paths = getattr(self.viewer, "_section_paths", [])
+        if not paths:
             QMessageBox.information(self, "Bilgi", "Kesit verisi yok.")
             return
         file_path, _ = QFileDialog.getSaveFileName(self, "TXT olarak kaydet", "", "Metin Dosyası (*.txt)")
         if not file_path:
             return
         try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                for poly in self.viewer._section_paths:
-                    for p in poly:
-                        f.write(f"{p[0]:.4f}, {p[1]:.4f}, {p[2]:.4f}\n")
-                    f.write("\n")
+            self.uc_export(paths, file_path)
             QMessageBox.information(self, "Başarılı", "TXT olarak kaydedildi.")
         except Exception as e:
             QMessageBox.critical(self, "Hata", f"Kaydedilemedi: {e}")
 
-    # ---------------- Aim helpers (mevcut davranış) ----------------
-    def _ensure_aim_center(self):
-        vp = self.viewer._cached_vp
-        if vp is None:
-            return None
-        mx = vp[0] + vp[2] * 0.5
-        my = vp[1] + vp[3] * 0.5
-        self._aim_px = (mx, my)
-        return self._aim_px
 
-    def _select_at_screen_px(self, mx, my):
-        ray_o, ray_d = self.viewer.compute_ray_from_window_pixels(mx, my)
-        if ray_o is None or ray_d is None:
-            return
-        p_surface, normal, p_draw = self.section.pick_point(
-            (self.viewer.vertices, self.viewer.faces), ray_o, ray_d
-        )
-        if p_surface is not None:
-            self._picked_point, self._picked_normal = p_surface, normal
-            self.viewer.set_pick_point(p_draw, normal=normal)
 
-    def keyPressEvent(self, ev):
-        if self._aim_px is None and self.viewer._cached_vp is not None:
-            self._ensure_aim_center()
-        if self._aim_px is None:
-            return super().keyPressEvent(ev)
 
-        mx, my = self._aim_px
-        step = self._aim_step
-        if ev.key() == Qt.Key_Left:
-            mx -= step
-        elif ev.key() == Qt.Key_Right:
-            mx += step
-        elif ev.key() == Qt.Key_Up:
-            my += step
-        elif ev.key() == Qt.Key_Down:
-            my -= step
-        elif ev.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
-            self._select_at_screen_px(mx, my)
-            return
-        else:
-            return super().keyPressEvent(ev)
 
-        self._aim_px = (mx, my)
-        self._select_at_screen_px(mx, my)
 
-    def _hook_viewer_keypress(self):
-        original = self.viewer.keyPressEvent
-        def on_key(ev):
-            if self.viewer._cached_vp is None:
-                return original(ev)
 
-            if self._aim_px is None:
-                self._ensure_aim_center()
 
-            mx, my = self._aim_px
-            step = self._aim_step
-            if ev.modifiers() & Qt.ShiftModifier:
-                step *= 10
-
-            k = ev.key()
-            if k == Qt.Key_Left:
-                mx -= step
-            elif k == Qt.Key_Right:
-                mx += step
-            elif k == Qt.Key_Up:
-                my += step
-            elif k == Qt.Key_Down:
-                my -= step
-            elif k in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
-                self._select_at_screen_px(mx, my)
-                return
-            elif k == Qt.Key_C:
-                self._ensure_aim_center()
-                mx, my = self._aim_px
-                self._select_at_screen_px(mx, my)
-                return
-            else:
-                return original(ev)
-
-            vx, vy, vw, vh = map(int, self.viewer._cached_vp)
-            mx = max(vx, min(vx + vw - 1, int(mx)))
-            my = max(vy, min(vy + vh - 1, int(my)))
-
-            self._aim_px = (mx, my)
-            self._select_at_screen_px(mx, my)
-
-        self.viewer.keyPressEvent = on_key

@@ -20,27 +20,56 @@ class SectionWorker(QThread):
 
     def __init__(self, vertices, faces, pick_point, axis: str = "z"):
         super().__init__()
-        self.vertices = np.asarray(vertices, dtype=np.float64) if vertices is not None else None
-        self.faces = np.asarray(faces, dtype=np.int32).reshape(-1, 3) if faces is not None else None
-        self.pick_point = None if pick_point is None else np.asarray(pick_point, dtype=np.float64)
+        # Kopyasız cast – büyük meshlerde gereksiz RAM kullanımını önler
+        self.vertices = None if vertices is None else np.asarray(vertices, dtype=np.float64)
+        self.faces = None if faces is None else np.asarray(faces, dtype=np.int32).reshape(-1, 3)
+        self.pick_point = None if pick_point is None else np.asarray(pick_point, dtype=np.float64).reshape(3)
         self.axis = (axis or "z").lower()
+
+    def _validate_inputs(self):
+        if self.vertices is None or self.faces is None:
+            raise ValueError("Geçerli mesh verisi yok (vertices/faces None).")
+        if self.vertices.size == 0 or self.faces.size == 0:
+            raise ValueError("Geçerli mesh verisi yok (vertices/faces boş).")
+
+        if self.pick_point is None or self.pick_point.shape[0] != 3:
+            raise ValueError("Geçerli bir pick noktası (x,y,z) verilmelidir.")
+
+        if not np.all(np.isfinite(self.vertices)):
+            raise ValueError("Vertices içinde sonlu olmayan (NaN/Inf) değerler var.")
+        if not np.all(np.isfinite(self.pick_point)):
+            raise ValueError("Pick noktası içinde sonlu olmayan (NaN/Inf) değerler var.")
+
+        if self.axis not in ("x", "y", "z"):
+            raise ValueError(f"Eksen hatalı: '{self.axis}'. 'x','y' veya 'z' olmalı.")
 
     def run(self):
         try:
-            if self.vertices is None or self.faces is None or self.vertices.size == 0 or self.faces.size == 0:
-                raise ValueError("Geçerli mesh verisi yok (vertices/faces boş).")
-            if self.pick_point is None or self.pick_point.shape[0] != 3:
-                raise ValueError("Geçerli bir pick noktası (x,y,z) verilmelidir.")
-            if self.axis not in ("x", "y", "z"):
-                raise ValueError(f"Eksen hatalı: '{self.axis}'. 'x','y' veya 'z' olmalı.")
+            # İptal kontrolü
+            if self.isInterruptionRequested():
+                return
 
-            # Viewer'da çizilen normalize mesh ile aynı uzayda çalışmak için process=False
+            # 1) Giriş doğrulama
+            self._validate_inputs()
+
+            # 2) Mesh oluştur (viewer ile aynı normalize uzayda)
+            # process=False -> trimesh iç işleme yapmasın (tepe/normal düzeltme yapmadan olduğu gibi al)
             mesh = trimesh.Trimesh(vertices=self.vertices, faces=self.faces, process=False)
 
-            # SectionService'i kullanarak kesit hesapla
+            # Debug: sınırlar ve pick noktası
+            try:
+                bounds = mesh.bounds if hasattr(mesh, "bounds") else None
+                print(f"[SEC] mesh bounds: {bounds}, pick_point: {self.pick_point}, axis: {self.axis}")
+            except Exception:
+                pass
+
+            if self.isInterruptionRequested():
+                return
+
+            # 3) Kesit hesapla
             paths = SectionService.compute_section(mesh, self.pick_point, self.axis)
 
-            # Sonucu ana threade gönder
+            # 4) Sonucu yayınla (boş olabilir → UI bunu handle ediyor)
             self.finished.emit(paths or [])
 
         except Exception as e:

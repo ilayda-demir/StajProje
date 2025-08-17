@@ -191,10 +191,15 @@ class OpenGLViewer(QOpenGLWidget):
             glDisable(GL_LIGHTING)
             glColor3f(1.0, 1.0, 0.0)
             for poly in self._section_paths:
-                if not poly:
+                if poly is None:
+                    continue
+                P = np.asarray(poly, dtype=np.float32)
+                if P.ndim != 2 or P.shape[0] < 2 or P.shape[1] != 3:
+                    continue
+                if not np.all(np.isfinite(P)):
                     continue
                 glBegin(GL_LINE_STRIP)
-                for p in poly:
+                for p in P:
                     glVertex3f(float(p[0]), float(p[1]), float(p[2]))
                 glEnd()
 
@@ -291,3 +296,24 @@ class OpenGLViewer(QOpenGLWidget):
         glColor3f(0.0, 0.0, 1.0); glVertex3f(0.0, 0.0, -2.0); glVertex3f(0.0, 0.0, 2.0)
         glEnd()
         glEnable(GL_LIGHTING)
+
+    def compute_ray_from_window_pixels(self, mx, my):
+        MV = self._cached_model;
+        P = self._cached_proj;
+        vp = self._cached_vp
+        if MV is None or P is None or vp is None:
+            return None, None
+        # normalize window coords
+        wx, wy = float(mx), float(my)
+        # near ve far noktalarını dünya uzayına aç
+        near = gluUnProject(wx, wy, 0.0, MV, P, vp)
+        far = gluUnProject(wx, wy, 1.0, MV, P, vp)
+        if near is None or far is None:
+            return None, None
+        o = np.array(near, dtype=np.float64)
+        d = np.array(far, dtype=np.float64) - o
+        n = np.linalg.norm(d)
+        if n == 0:
+            return None, None
+        return o, d / n
+
