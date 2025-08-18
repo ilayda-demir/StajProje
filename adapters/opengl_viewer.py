@@ -35,7 +35,7 @@ class OpenGLViewer(QOpenGLWidget):
         self.rotation_x = 0.0
         self.rotation_y = 0.0
         self.rotation_z = 0.0
-        self.zoom_distance = -5.0
+        self.zoom_distance = -6.0
         self.last_mouse_pos = None
         self.setFocusPolicy(Qt.StrongFocus)
 
@@ -65,7 +65,7 @@ class OpenGLViewer(QOpenGLWidget):
         self.normals_v = self._compute_vertex_normals(V, F)
 
         self.rotation_x = self.rotation_y = self.rotation_z = 0.0
-        self.zoom_distance = -5.0
+
         self.last_mouse_pos = None
 
         self._picked = None
@@ -93,7 +93,7 @@ class OpenGLViewer(QOpenGLWidget):
         glEnable(GL_DEPTH_TEST)
         glDepthFunc(GL_LESS)
         glClearDepth(1.0)
-        glClearColor(0.12, 0.12, 0.12, 1.0)
+        glClearColor(0.18, 0.18, 0.18, 1.0)
 
         # Aydınlatma
         glEnable(GL_LIGHTING)
@@ -116,6 +116,13 @@ class OpenGLViewer(QOpenGLWidget):
         # >>> Transparanlık
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+        # GLUT güvenli başlatma (eksende yazı için)
+        try:
+            from OpenGL.GLUT import glutInit
+            glutInit()
+        except Exception:
+            pass
 
         # İlk projeksiyon
         w = max(1, self.width())
@@ -149,7 +156,7 @@ class OpenGLViewer(QOpenGLWidget):
         self._cached_proj = np.array(proj, dtype=np.float64).reshape((4, 4), order='F')
         self._cached_vp = np.array(vp, dtype=np.int32)
 
-        # Eksenler
+        # Eksenler (+ etiketler)
         self._draw_axes()
 
         # Mesh
@@ -208,7 +215,8 @@ class OpenGLViewer(QOpenGLWidget):
             px, py, pz = map(float, self._picked)
             glDisable(GL_LIGHTING)
             glDisable(GL_DEPTH_TEST)
-            glColor3f(1.0, 0.1, 0.1)
+            glColor3f(1.0, 0.7, 0.1)
+
             glPointSize(12.0)
             glBegin(GL_POINTS)
             glVertex3f(px, py, pz)
@@ -285,6 +293,7 @@ class OpenGLViewer(QOpenGLWidget):
         return (N / lens).astype(np.float32)
 
     def _draw_axes(self):
+        # Eksen çizgileri
         glDisable(GL_LIGHTING)
         glLineWidth(2.0)
         glBegin(GL_LINES)
@@ -295,11 +304,17 @@ class OpenGLViewer(QOpenGLWidget):
         # Z (mavi)
         glColor3f(0.0, 0.0, 1.0); glVertex3f(0.0, 0.0, -2.0); glVertex3f(0.0, 0.0, 2.0)
         glEnd()
+
+        # Uçlara eksen etiketleri (eksene uygun renkler)
+        self._draw_text_3d(2.15, 0.0, 0.0, "X", (1.0, 0.0, 0.0))
+        self._draw_text_3d(0.0, 2.15, 0.0, "Y", (0.0, 1.0, 0.0))
+        self._draw_text_3d(0.0, 0.0, 2.15, "Z", (0.0, 0.0, 1.0))
+
         glEnable(GL_LIGHTING)
 
     def compute_ray_from_window_pixels(self, mx, my):
-        MV = self._cached_model;
-        P = self._cached_proj;
+        MV = self._cached_model
+        P = self._cached_proj
         vp = self._cached_vp
         if MV is None or P is None or vp is None:
             return None, None
@@ -317,3 +332,23 @@ class OpenGLViewer(QOpenGLWidget):
             return None, None
         return o, d / n
 
+    # ---------- Helpers ----------
+    def _draw_text_3d(self, x, y, z, text, color=(1.0, 1.0, 1.0)):
+        """3B uzayda tek satır yazı (eksene uygun renkte, state izolasyonlu)."""
+        try:
+            from OpenGL.GLUT import glutBitmapCharacter, GLUT_BITMAP_HELVETICA_18
+        except Exception:
+            return  # GLUT yoksa sessizce atla
+
+        # Mevcut enable/disable bayraklarını koru
+        glPushAttrib(GL_ENABLE_BIT)
+        try:
+            glDisable(GL_LIGHTING)     # yazı için düz renk
+            glDisable(GL_DEPTH_TEST)   # her zaman görünür olsun (istersen bunu kaldırabilirsin)
+            glColor3f(*color)
+            glRasterPos3f(x, y, z)
+
+            for ch in text:
+                glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, ord(ch))
+        finally:
+            glPopAttrib()
