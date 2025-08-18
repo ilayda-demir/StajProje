@@ -16,6 +16,8 @@ def _child_load(file_path, conn):
 
         V = loader.get_vertices()  # normalized
         F = loader.get_faces()
+        C = loader.center
+        S = loader.scale
 
         # D diski üzerinde temp klasörü kullan
         TMP_DIR = r"D:\temp"
@@ -24,7 +26,7 @@ def _child_load(file_path, conn):
         tmp = tempfile.NamedTemporaryFile(prefix="mesh_", suffix=".npz", dir=TMP_DIR, delete=False)
         tmp_path = tmp.name
         tmp.close()
-        np.savez_compressed(tmp_path, V=V, F=F)
+        np.savez_compressed(tmp_path, V=V, F=F, C=C, S=S)
 
         conn.send({"ok": True, "path": tmp_path})
     except Exception as e:
@@ -37,7 +39,7 @@ def _child_load(file_path, conn):
 
 
 class ProcessModelLoaderWorker(QThread):
-    loaded = pyqtSignal(object, object)  # (V, F)
+    loaded = pyqtSignal(object, object, object, object)  # (V, F, C, S)
     error  = pyqtSignal(str)
 
     def __init__(self, file_path: str):
@@ -106,12 +108,14 @@ class ProcessModelLoaderWorker(QThread):
         path = msg["path"]
         try:
             with np.load(path) as data:
-                V = data["V"]
-                F = data["F"]
+                V = data["V"];
+                F = data["F"];
+                C = data["C"];
+                S = float(data["S"])
         finally:
             try:
                 os.remove(path)
             except Exception:
                 pass
 
-        self.loaded.emit(V, F)
+        self.loaded.emit(V, F, C, S)
