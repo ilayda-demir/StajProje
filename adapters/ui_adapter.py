@@ -23,18 +23,18 @@ from workers.process_model_loader_worker import ProcessModelLoaderWorker
 from workers.section_worker import SectionWorker
 
 
-# ---- Yazım sırasında ara metinleri ( "-", "-.", "." vb.) kabul eden spinbox ----
+# ---- Spinbox that accepts intermediate states during typing ("-", "-.", "." etc.) ----
 class LooseDoubleSpinBox(QDoubleSpinBox):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
-        self.setKeyboardTracking(False)      # yazarken anında "fixup" yapmasın
-        self.setLocale(QLocale.c())          # ondalık ayırıcı = '.'
+        self.setKeyboardTracking(False)      # do not immediately "fixup" while typing
+        self.setLocale(QLocale.c())          # decimal separator = '.'
 
     def validate(self, text, pos):
-        # Ara durumları "Intermediate" olarak kabul et
+        # Accept intermediate states as "Intermediate"
         if text in ("", "-", "+", ".", "-.", "+."):
             return (QValidator.Intermediate, text, pos)
-        if text.lower() in ("e", "-e", "+e"):   # bilimsel gösterim ara durumu (opsiyonel)
+        if text.lower() in ("e", "-e", "+e"):   # optional intermediate for scientific notation
             return (QValidator.Intermediate, text, pos)
         return super().validate(text, pos)
 
@@ -42,7 +42,7 @@ class LooseDoubleSpinBox(QDoubleSpinBox):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("3D Model Görüntüleyici")
+        self.setWindowTitle("3D Model Viewer")
         self.setGeometry(100, 100, 900, 700)
 
         self.viewer = OpenGLViewer()
@@ -65,16 +65,16 @@ class MainWindow(QMainWindow):
         self._picked_normal = None
         self._axis = "z"
 
-        # Orijinal uzay bilgisi (varsa)
+        # Original space info (if available)
         self._orig_center = None      # np.ndarray(3,)
         self._orig_scale  = None      # float
-        self._coord_mode  = "Normalize"  # "Normalize" | "Orijinal" (orijinal bilgi yoksa yalnızca Normalize)
+        self._coord_mode  = "Normalize"  # "Normalize" | "Original" (if no original info, only Normalize)
 
         self._proc_loader = None
         self._sec_worker = None
 
-        # --- Üst bar ---
-        self.load_button = QPushButton("3D Model Yükle")
+        # --- Top bar ---
+        self.load_button = QPushButton("Load 3D Model")
         self.load_button.clicked.connect(self.load_model)
 
         self.axis_combo = QComboBox()
@@ -82,14 +82,14 @@ class MainWindow(QMainWindow):
         self.axis_combo.setCurrentText("z")
         self.axis_combo.currentTextChanged.connect(self._on_axis_changed)
 
-        self.slice_button = QPushButton("Kesit Al")
+        self.slice_button = QPushButton("Take Section")
         self.slice_button.clicked.connect(self.compute_section)
 
-        self.export_button = QPushButton("TXT'ye Aktar")
+        self.export_button = QPushButton("Export to CSV")
         self.export_button.clicked.connect(self.export_txt)
 
-        # --- Şeffaflık kontrolü ---
-        self.alpha_label = QLabel("Şeffaflık:")
+        # --- Transparency control ---
+        self.alpha_label = QLabel("Transparency:")
         self.alpha_spin = LooseDoubleSpinBox()
         self.alpha_spin.setRange(0.0, 1.0)
         self.alpha_spin.setDecimals(2)
@@ -104,24 +104,24 @@ class MainWindow(QMainWindow):
         self.alpha_spin.valueChanged.connect(self._on_alpha_spin_changed)
         self.alpha_slider.valueChanged.connect(self._on_alpha_slider_changed)
 
-        # --- Koordinat uzayı seçimi ---
-        self.space_label = QLabel("Uzay:")
+        # --- Coordinate space selection ---
+        self.space_label = QLabel("Space:")
         self.space_combo = QComboBox()
         self._refresh_space_combo()
         self.space_combo.currentTextChanged.connect(self._on_space_changed)
 
-        # --- Manuel pick girişi ---
-        self.manual_label = QLabel("Nokta (x,y,z):")
+        # --- Manual pick input ---
+        self.manual_label = QLabel("Point (x,y,z):")
         self.x_spin = LooseDoubleSpinBox()
         self.y_spin = LooseDoubleSpinBox()
         self.z_spin = LooseDoubleSpinBox()
         for sp in (self.x_spin, self.y_spin, self.z_spin):
-            sp.setRange(-1_000_000.0, 1_000_000.0)  # geniş aralık; modeli yükleyince daraltıyoruz
+            sp.setRange(-1_000_000.0, 1_000_000.0)  # wide range; narrowed once model is loaded
             sp.setDecimals(6)
             sp.setSingleStep(0.01)
             sp.setValue(0.0)
 
-        self.apply_point_btn = QPushButton("Noktayı Uygula")
+        self.apply_point_btn = QPushButton("Apply Point")
         self.apply_point_btn.clicked.connect(self._apply_manual_point)
 
         # --- Layout ---
@@ -153,35 +153,35 @@ class MainWindow(QMainWindow):
         container.setLayout(layout)
         self.setCentralWidget(container)
 
-        # Ctrl + Sol Tık ile pick
+        # Ctrl + Left Click for picking
         self.viewer.mousePressEvent = self._wrap_mouse_press(self.viewer.mousePressEvent)
 
-    # ---------------- Helpers: koordinat dönüşümleri ----------------
+    # ---------------- Helpers: coordinate transformations ----------------
     def _to_original(self, P):
-        """Normalize → Orijinal (tek nokta veya Nx3)."""
+        """Normalize → Original (single point or Nx3)."""
         if self._orig_center is None or self._orig_scale is None or P is None:
             return P
         P = np.asarray(P, dtype=np.float64)
         return self._orig_center + P * (self._orig_scale / 2.0)
 
     def _to_normalized(self, P):
-        """Orijinal → Normalize (tek nokta veya Nx3)."""
+        """Original → Normalize (single point or Nx3)."""
         if self._orig_center is None or self._orig_scale is None or P is None:
             return P
         P = np.asarray(P, dtype=np.float64)
         return (P - self._orig_center) / self._orig_scale * 2.0
 
     def _refresh_space_combo(self):
-        """Orijinal bilgiye göre uzay seçeneklerini güncelle."""
+        """Update space options depending on availability of original info."""
         have_orig = (self._orig_center is not None) and (self._orig_scale is not None)
         current = self._coord_mode
         self.space_combo.blockSignals(True)
         self.space_combo.clear()
         self.space_combo.addItem("Normalize")
         if have_orig:
-            self.space_combo.addItem("Orijinal")
+            self.space_combo.addItem("Original")
         else:
-            # Orijinal yoksa mod 'Normalize' kalsın
+            # If no original, force mode to Normalize
             current = "Normalize"
             self._coord_mode = "Normalize"
         self.space_combo.setCurrentText(current)
@@ -196,8 +196,8 @@ class MainWindow(QMainWindow):
                     self._picked_point = p_depth
                     self._picked_normal = None
                     self.uc_pick(p_depth, None)
-                    # SpinBox'ları etkin uzaya göre doldur
-                    p_show = self._to_original(p_depth) if self._coord_mode == "Orijinal" else p_depth
+                    # Fill SpinBoxes according to active space
+                    p_show = self._to_original(p_depth) if self._coord_mode == "Original" else p_depth
                     self.x_spin.setValue(float(p_show[0]))
                     self.y_spin.setValue(float(p_show[1]))
                     self.z_spin.setValue(float(p_show[2]))
@@ -223,7 +223,7 @@ class MainWindow(QMainWindow):
                     self._picked_point = p_surface
                     self._picked_normal = normal
                     self.uc_pick(p_draw, normal)
-                    p_show = self._to_original(p_draw) if self._coord_mode == "Orijinal" else p_draw
+                    p_show = self._to_original(p_draw) if self._coord_mode == "Original" else p_draw
                     self.x_spin.setValue(float(p_show[0]))
                     self.y_spin.setValue(float(p_show[1]))
                     self.z_spin.setValue(float(p_show[2]))
@@ -239,7 +239,7 @@ class MainWindow(QMainWindow):
 
     def _on_space_changed(self, txt):
         self._coord_mode = txt
-        # Mevcut vertex'lere göre spin aralıklarını güncelle
+        # Update SpinBox ranges based on current vertices
         if self.viewer.vertices is not None:
             self._set_spin_ranges_from_mesh(self.viewer.vertices, space=self._coord_mode)
 
@@ -257,12 +257,12 @@ class MainWindow(QMainWindow):
         self.alpha_spin.blockSignals(False)
 
     def _apply_manual_point(self):
-        # Kullanıcının ekranda gördüğü uzaydan normalize'a çevirip viewer'a gönder
+        # Convert from the space the user sees into normalized and send to viewer
         px = float(self.x_spin.value())
         py = float(self.y_spin.value())
         pz = float(self.z_spin.value())
         p_in = np.array([px, py, pz], dtype=np.float64)
-        p_norm = self._to_normalized(p_in) if self._coord_mode == "Orijinal" else p_in
+        p_norm = self._to_normalized(p_in) if self._coord_mode == "Original" else p_in
 
         self._picked_point = p_norm
         self._picked_normal = None
@@ -270,12 +270,12 @@ class MainWindow(QMainWindow):
 
     # ---------------- Model Load (Process) ----------------
     def load_model(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "3D Model Seç", "", "3D Modeller (*.obj *.stl)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select 3D Model", "", "3D Models (*.obj *.stl)")
         if not file_path:
             return
 
         self.load_button.setEnabled(False)
-        print("[DBG] load_model: seçilen dosya:", file_path)
+        print("[DBG] load_model: selected file:", file_path)
 
         self._proc_loader = ProcessModelLoaderWorker(file_path)
         self._proc_loader.loaded.connect(self._on_model_loaded)
@@ -284,9 +284,9 @@ class MainWindow(QMainWindow):
 
     def _on_model_loaded(self, *args):
         """
-        Worker iki farklı imza ile gelebilir:
+        Worker can return with two different signatures:
           - (V, F)
-          - (V, F, C, S)  -> center & scale varsa
+          - (V, F, C, S)  -> if center & scale available
         """
         if len(args) == 2:
             vertices, faces = args
@@ -294,20 +294,20 @@ class MainWindow(QMainWindow):
         elif len(args) >= 4:
             vertices, faces, center, scale = args[:4]
         else:
-            QMessageBox.critical(self, "Model Yükleme Hatası", "Beklenmeyen yükleme çıktısı.")
+            QMessageBox.critical(self, "Model Load Error", "Unexpected load output.")
             self.load_button.setEnabled(True)
             self._proc_loader = None
             return
 
-        print("[DBG] on_model_loaded: V/F alındı → viewer’a aktarılıyor")
+        print("[DBG] on_model_loaded: V/F received → passing to viewer")
         self.viewer_port.show_mesh(vertices, faces)
 
-        # Orijinal uzay bilgisi (varsa) sakla
+        # Save original space info (if any)
         self._orig_center = None if center is None else np.asarray(center, dtype=np.float64)
         self._orig_scale  = None if scale  is None else float(scale)
         self._refresh_space_combo()
 
-        # Aktif uzaya göre aralıkları belirle
+        # Set SpinBox ranges according to active space
         self._set_spin_ranges_from_mesh(vertices, space=self._coord_mode)
 
         self._picked_point = None
@@ -318,8 +318,8 @@ class MainWindow(QMainWindow):
         self._proc_loader = None
 
     def _on_model_load_error(self, msg):
-        print("[ERR] Model yükleme hatası:", msg)
-        QMessageBox.critical(self, "Model Yükleme Hatası", msg or "Bilinmeyen hata")
+        print("[ERR] Model load error:", msg)
+        QMessageBox.critical(self, "Model Load Error", msg or "Unknown error")
         self.load_button.setEnabled(True)
         self._proc_loader = None
 
@@ -342,49 +342,55 @@ class MainWindow(QMainWindow):
         self._sec_worker = None
 
     def _on_section_err(self, msg):
-        QMessageBox.critical(self, "Kesit Hatası", msg or "Bilinmeyen hata")
+        QMessageBox.critical(self, "Section Error", msg or "Unknown error")
         self.slice_button.setEnabled(True)
         self._sec_worker = None
 
-    # adapters/ui_adapter.py içindeki export_txt()’yi şöyle güncelle
+    # ---------------- CSV Export ----------------
     def export_txt(self):
         paths = getattr(self.viewer, "_section_paths", [])
         if not paths:
-            QMessageBox.information(self, "Bilgi", "Kesit verisi yok.")
+            QMessageBox.information(self, "Info", "No section data.")
             return
 
-        file_path, _ = QFileDialog.getSaveFileName(self, "TXT olarak kaydet", "", "Metin Dosyası (*.txt)")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save as CSV", "", "CSV File (*.csv)"
+        )
         if not file_path:
             return
 
-        # Hangi uzayda kaydedelim? (Mevcut seçim: self._coord_mode)
+        # If user did not type extension, add .csv
+        if not file_path.lower().endswith(".csv"):
+            file_path += ".csv"
+
+        # Which space to save in? (Current selection: self._coord_mode)
         paths_to_save = paths
         try:
-            if (self._coord_mode == "Orijinal"
+            if (self._coord_mode == "Original"
                     and self._orig_center is not None and self._orig_scale is not None):
-                # Normalize → Orijinal (Nx3 vektörel çalışır)
+                # Normalize → Original (works vectorized)
                 paths_to_save = [self._to_original(np.asarray(poly, dtype=np.float64)) for poly in paths]
         except Exception as e:
-            QMessageBox.warning(self, "Uyarı", f"Orijinale çevirilemedi, normalize kaydedilecek.\n{e}")
+            QMessageBox.warning(self, "Warning", f"Could not convert to original, will save normalized.\n{e}")
             paths_to_save = paths
 
         try:
             self.uc_export(paths_to_save, file_path)
-            QMessageBox.information(self, "Başarılı", "TXT olarak kaydedildi.")
+            QMessageBox.information(self, "Success", "Saved as CSV.")
         except Exception as e:
-            QMessageBox.critical(self, "Hata", f"Kaydedilemedi: {e}")
+            QMessageBox.critical(self, "Error", f"Could not save: {e}")
 
     # ---------------- Ranges ----------------
     def _set_spin_ranges_from_mesh(self, V: np.ndarray, space: str = "Normalize"):
-        """Spin aralıklarını aktif uzaya göre ayarlar."""
+        """Adjust SpinBox ranges according to the active space."""
         if V is None or V.size == 0:
             return
         Vn = np.asarray(V, dtype=float)
-        Vuse = self._to_original(Vn) if space == "Orijinal" else Vn   # vektörel çalışır
+        Vuse = self._to_original(Vn) if space == "Original" else Vn   # vectorized
         vmin = Vuse.min(axis=0)
         vmax = Vuse.max(axis=0)
         extent = np.maximum(vmax - vmin, 1e-6)
-        pad = 0.50 * float(np.max(extent))  # geniş tampon: yazarken kısıtlamasın
+        pad = 0.50 * float(np.max(extent))  # large padding: avoids constraint while typing
 
         self.x_spin.setRange(float(vmin[0] - pad), float(vmax[0] + pad))
         self.y_spin.setRange(float(vmin[1] - pad), float(vmax[1] + pad))

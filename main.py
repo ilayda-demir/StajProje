@@ -1,9 +1,9 @@
 import os
 import sys
 
-# Uyumluluk ve performans ayarları
-os.environ["TRIMESH_NO_EMBREE"] = "1"   # trimesh hız/uyumluluk
-# os.environ["QT_OPENGL"] = "software"  # OpenGL sorun olursa açılabilir
+# Compatibility and performance settings
+os.environ["TRIMESH_NO_EMBREE"] = "1"   # trimesh speed/compatibility
+# os.environ["QT_OPENGL"] = "software"  # can be enabled if OpenGL issues occur
 
 from PyQt5.QtCore import QCoreApplication, Qt
 QCoreApplication.setAttribute(Qt.AA_UseDesktopOpenGL)
@@ -14,7 +14,7 @@ from PyQt5.QtGui import QSurfaceFormat
 from adapters.ui_adapter import MainWindow
 
 if __name__ == "__main__":
-    # OpenGL format ayarları
+    # OpenGL format settings
     fmt = QSurfaceFormat()
     fmt.setRenderableType(QSurfaceFormat.OpenGL)
     fmt.setProfile(QSurfaceFormat.CompatibilityProfile)

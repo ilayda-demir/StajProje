@@ -11,7 +11,7 @@ def _child_load(file_path, conn):
         loader = ModelLoader()
         ok = loader.load_model(file_path)
         if not ok:
-            conn.send({"ok": False, "err": f"Model yüklenemedi: {file_path}"})
+            conn.send({"ok": False, "err": f"Model could not be loaded: {file_path}"})
             return
 
         V = loader.get_vertices()  # normalized
@@ -19,7 +19,7 @@ def _child_load(file_path, conn):
         C = loader.center
         S = loader.scale
 
-        # D diski üzerinde temp klasörü kullan
+        # Use a temp folder on D drive
         TMP_DIR = r"D:\temp"
         os.makedirs(TMP_DIR, exist_ok=True)
 
@@ -49,14 +49,14 @@ class ProcessModelLoaderWorker(QThread):
         self._parent_conn = None
 
     def cancel(self):
-        """UI kapanırken veya kullanıcı iptal edince çağır."""
+        """Called when UI is closing or the user cancels."""
         try:
             self.requestInterruption()
         except Exception:
             pass
         try:
             if self._parent_conn is not None:
-                self._parent_conn.close()   # run() içindeki poll/recv kırılır
+                self._parent_conn.close()   # breaks poll/recv inside run()
         except Exception:
             pass
         try:
@@ -75,7 +75,7 @@ class ProcessModelLoaderWorker(QThread):
 
         msg = None
         try:
-            # Kısa aralıklarla bak: iptal isteği gelirse çık
+            # Check in short intervals: exit if cancellation requested
             while True:
                 if self.isInterruptionRequested():
                     break
@@ -83,7 +83,7 @@ class ProcessModelLoaderWorker(QThread):
                     msg = parent_conn.recv()
                     break
         except EOFError:
-            msg = {"ok": False, "err": "İletişim kesildi (EOF)."}
+            msg = {"ok": False, "err": "Communication lost (EOF)."}
         except Exception as e:
             msg = {"ok": False, "err": f"{e}\n{traceback.format_exc()}"}
         finally:
@@ -97,20 +97,20 @@ class ProcessModelLoaderWorker(QThread):
             except Exception:
                 pass
 
-        # İptal edilmişse hiçbir sinyal yaymadan sessizce bit
+        # If cancelled, exit silently without emitting any signals
         if msg is None:
             return
 
         if not msg.get("ok"):
-            self.error.emit(msg.get("err") or "Bilinmeyen hata")
+            self.error.emit(msg.get("err") or "Unknown error")
             return
 
         path = msg["path"]
         try:
             with np.load(path) as data:
-                V = data["V"];
-                F = data["F"];
-                C = data["C"];
+                V = data["V"]
+                F = data["F"]
+                C = data["C"]
                 S = float(data["S"])
         finally:
             try:

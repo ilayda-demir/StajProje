@@ -9,11 +9,11 @@ class SectionService:
     @staticmethod
     def compute_section(mesh: trimesh.Trimesh, point: np.ndarray, axis: str):
         """
-        Shapely/GEOS KULLANMADAN:
-        - trimesh.intersections.mesh_plane -> 3B segmentler
-        - Segment uçlarını toleransla eşleyip polylinelere stitch et
-        - NaN/tek-nokta filtreleri
-        Döner: [np.ndarray(K,3), ...]
+        WITHOUT using Shapely/GEOS:
+        - trimesh.intersections.mesh_plane -> 3D segments
+        - Match segment endpoints with tolerance and stitch into polylines
+        - NaN/single-point filters
+        Returns: [np.ndarray(K,3), ...]
         """
         if mesh is None or point is None:
             return []
@@ -31,7 +31,7 @@ class SectionService:
         if V.size == 0 or F.size == 0:
             return []
 
-        # 1) Düzlem-mesh kesişim segmentleri (saf, stabil)
+        # 1) Plane-mesh intersection segments (raw, stable)
         try:
             segs = trimesh.intersections.mesh_plane(
                 mesh=mesh,
@@ -45,9 +45,9 @@ class SectionService:
 
         segs = np.asarray(segs, dtype=np.float64)  # (N,2,3)
 
-        # 2) Uçları toleransla eşleyip polylinelere birleştir
+        # 2) Match endpoints with tolerance and merge into polylines
         EPS = 1e-6
-        def key(p):  # toleranslı hash
+        def key(p):  # tolerant hash
             return tuple(np.round(p / EPS).astype(np.int64).tolist())
 
         from collections import defaultdict
@@ -85,7 +85,7 @@ class SectionService:
                     si, other = nxt
                     unused.remove(si)
                     if forward:
-                        # ardışık ayni nokta olmasın
+                        # avoid consecutive identical points
                         if not np.allclose(path[-1], other, atol=EPS):
                             path.append(other)
                         cur = other
@@ -95,9 +95,9 @@ class SectionService:
                         cur = other
 
             P = np.asarray(path, dtype=np.float64)
-            # NaN/tek-nokta/gereksiz tekrarları at
+            # Filter NaN/single-point/unnecessary duplicates
             if P.shape[0] >= 2 and np.all(np.isfinite(P)):
-                # art arda aynı noktaları sıkıştır
+                # compress consecutive identical points
                 keep = [0]
                 for i in range(1, P.shape[0]):
                     if not np.allclose(P[i], P[keep[-1]], atol=EPS):

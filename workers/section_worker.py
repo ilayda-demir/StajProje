@@ -8,9 +8,9 @@ from core.section_service import SectionService
 
 class SectionWorker(QThread):
     """
-    Kesit hesaplamasını (section) arka planda yapmak için QThread tabanlı worker.
-    Kullanım:
-      worker = SectionWorker(vertices, faces, pick_point, axis)  # axis: "x", "y" veya "z"
+    QThread-based worker to compute cross-sections (sections) in the background.
+    Usage:
+      worker = SectionWorker(vertices, faces, pick_point, axis)  # axis: "x", "y" or "z"
       worker.finished.connect(on_paths)  # (paths: List[np.ndarray(N,3)])
       worker.error.connect(on_error)     # (msg: str)
       worker.start()
@@ -20,7 +20,7 @@ class SectionWorker(QThread):
 
     def __init__(self, vertices, faces, pick_point, axis: str = "z"):
         super().__init__()
-        # Kopyasız cast – büyük meshlerde gereksiz RAM kullanımını önler
+        # Cast without copying – prevents unnecessary RAM usage on large meshes
         self.vertices = None if vertices is None else np.asarray(vertices, dtype=np.float64)
         self.faces = None if faces is None else np.asarray(faces, dtype=np.int32).reshape(-1, 3)
         self.pick_point = None if pick_point is None else np.asarray(pick_point, dtype=np.float64).reshape(3)
@@ -28,35 +28,35 @@ class SectionWorker(QThread):
 
     def _validate_inputs(self):
         if self.vertices is None or self.faces is None:
-            raise ValueError("Geçerli mesh verisi yok (vertices/faces None).")
+            raise ValueError("No valid mesh data (vertices/faces are None).")
         if self.vertices.size == 0 or self.faces.size == 0:
-            raise ValueError("Geçerli mesh verisi yok (vertices/faces boş).")
+            raise ValueError("No valid mesh data (vertices/faces are empty).")
 
         if self.pick_point is None or self.pick_point.shape[0] != 3:
-            raise ValueError("Geçerli bir pick noktası (x,y,z) verilmelidir.")
+            raise ValueError("A valid pick point (x,y,z) must be provided.")
 
         if not np.all(np.isfinite(self.vertices)):
-            raise ValueError("Vertices içinde sonlu olmayan (NaN/Inf) değerler var.")
+            raise ValueError("Vertices contain non-finite values (NaN/Inf).")
         if not np.all(np.isfinite(self.pick_point)):
-            raise ValueError("Pick noktası içinde sonlu olmayan (NaN/Inf) değerler var.")
+            raise ValueError("Pick point contains non-finite values (NaN/Inf).")
 
         if self.axis not in ("x", "y", "z"):
-            raise ValueError(f"Eksen hatalı: '{self.axis}'. 'x','y' veya 'z' olmalı.")
+            raise ValueError(f"Invalid axis: '{self.axis}'. Must be 'x', 'y' or 'z'.")
 
     def run(self):
         try:
-            # İptal kontrolü
+            # Check for cancellation
             if self.isInterruptionRequested():
                 return
 
-            # 1) Giriş doğrulama
+            # 1) Validate inputs
             self._validate_inputs()
 
-            # 2) Mesh oluştur (viewer ile aynı normalize uzayda)
-            # process=False -> trimesh iç işleme yapmasın (tepe/normal düzeltme yapmadan olduğu gibi al)
+            # 2) Build mesh (in the same normalized space as viewer)
+            # process=False -> prevents trimesh from auto-fixing (keeps raw vertices/normals)
             mesh = trimesh.Trimesh(vertices=self.vertices, faces=self.faces, process=False)
 
-            # Debug: sınırlar ve pick noktası
+            # Debug: bounds and pick point
             try:
                 bounds = mesh.bounds if hasattr(mesh, "bounds") else None
                 print(f"[SEC] mesh bounds: {bounds}, pick_point: {self.pick_point}, axis: {self.axis}")
@@ -66,12 +66,12 @@ class SectionWorker(QThread):
             if self.isInterruptionRequested():
                 return
 
-            # 3) Kesit hesapla
+            # 3) Compute section
             paths = SectionService.compute_section(mesh, self.pick_point, self.axis)
 
-            # 4) Sonucu yayınla (boş olabilir → UI bunu handle ediyor)
+            # 4) Emit result (can be empty → UI handles this)
             self.finished.emit(paths or [])
 
         except Exception as e:
             tb = traceback.format_exc()
-            self.error.emit(f"Kesit hesabı sırasında hata: {e}\n{tb}")
+            self.error.emit(f"Error while computing section: {e}\n{tb}")

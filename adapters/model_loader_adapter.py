@@ -9,7 +9,7 @@ class TrimeshModelLoaderAdapter(ModelLoaderPort):
         loader = ModelLoader()
         ok = loader.load_model(file_path)
         if not ok:
-            raise RuntimeError(f"Model yüklenemedi: {file_path}")
+            raise RuntimeError(f"Model could not be loaded: {file_path}")
         V = loader.get_vertices().astype(np.float32, copy=False)
         F = loader.get_faces().astype(np.uint32, copy=False)
         return V, F

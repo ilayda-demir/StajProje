@@ -4,7 +4,7 @@ import numpy as np
 
 class ModelLoaderPort(Protocol):
     def load(self, file_path: str) -> Tuple[np.ndarray, np.ndarray]:
-        """Normalize uzayda (V: float32 [N,3], F: uint32 [M,3]) döner."""
+        """Returns (V: float32 [N,3], F: uint32 [M,3]) in normalized space."""
         ...
 
 class SectionComputerPort(Protocol):

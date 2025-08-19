@@ -10,10 +10,10 @@ import numpy as np
 
 class OpenGLViewer(QOpenGLWidget):
     """
-    Basit fixed-pipeline viewer:
-      - Aydınlatmalı doldurma + tel-kafes overlay
-      - Transparan mesh (alpha)
-      - Picking için model/projection cache
+    Simple fixed-pipeline viewer:
+      - Lit solid fill + wireframe overlay
+      - Transparent mesh (alpha)
+      - Model/projection cache for picking
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -26,12 +26,12 @@ class OpenGLViewer(QOpenGLWidget):
         fmt.setSamples(0)
         self.setFormat(fmt)
 
-        # Mesh verisi
+        # Mesh data
         self.vertices = None
         self.faces = None
         self.normals_v = None
 
-        # Kamera
+        # Camera
         self.rotation_x = 0.0
         self.rotation_y = 0.0
         self.rotation_z = 0.0
@@ -39,9 +39,9 @@ class OpenGLViewer(QOpenGLWidget):
         self.last_mouse_pos = None
         self.setFocusPolicy(Qt.StrongFocus)
 
-        # Görünüm
+        # Appearance
         self.base_color = (0.70, 0.72, 0.76)
-        self.mesh_alpha = 0.45           # varsayılan şeffaflık
+        self.mesh_alpha = 0.45           # default transparency
         self.show_edges = True
 
         # Picking / section
@@ -50,7 +50,7 @@ class OpenGLViewer(QOpenGLWidget):
         self._picked_ray = None
         self._section_paths = []
 
-        # Picking için cache
+        # Cache for picking
         self._cached_model = None
         self._cached_proj = None
         self._cached_vp = None
@@ -83,7 +83,7 @@ class OpenGLViewer(QOpenGLWidget):
         self.update()
 
     def set_mesh_alpha(self, a: float):
-        """Üst bardaki kontrol ile şeffaflığı güncelle."""
+        """Update transparency with top bar control."""
         self.mesh_alpha = float(max(0.0, min(1.0, a)))
         self.update()
 
@@ -95,7 +95,7 @@ class OpenGLViewer(QOpenGLWidget):
         glClearDepth(1.0)
         glClearColor(0.18, 0.18, 0.18, 1.0)
 
-        # Aydınlatma
+        # Lighting
         glEnable(GL_LIGHTING)
         glEnable(GL_LIGHT0)
         glLightfv(GL_LIGHT0, GL_AMBIENT,  (0.25, 0.25, 0.25, 1.0))
@@ -106,25 +106,25 @@ class OpenGLViewer(QOpenGLWidget):
         glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
         glShadeModel(GL_SMOOTH)
 
-        # Z-fighting azalt
+        # Reduce Z-fighting
         glEnable(GL_POLYGON_OFFSET_FILL)
         glPolygonOffset(1.0, 1.0)
 
         glEnable(GL_LINE_SMOOTH)
         glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
 
-        # >>> Transparanlık
+        # >>> Transparency
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-        # GLUT güvenli başlatma (eksende yazı için)
+        # Safe GLUT initialization (for axis labels)
         try:
             from OpenGL.GLUT import glutInit
             glutInit()
         except Exception:
             pass
 
-        # İlk projeksiyon
+        # Initial projection
         w = max(1, self.width())
         h = max(1, self.height())
         self.resizeGL(w, h)
@@ -142,13 +142,13 @@ class OpenGLViewer(QOpenGLWidget):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
 
-        # Kamera
+        # Camera
         glTranslatef(0.0, 0.0, self.zoom_distance)
         glRotatef(self.rotation_x, 1.0, 0.0, 0.0)
         glRotatef(self.rotation_y, 0.0, 1.0, 0.0)
         glRotatef(self.rotation_z, 0.0, 0.0, 1.0)
 
-        # Cache matrisler
+        # Cache matrices
         model = glGetDoublev(GL_MODELVIEW_MATRIX)
         proj = glGetDoublev(GL_PROJECTION_MATRIX)
         vp = glGetIntegerv(GL_VIEWPORT)
@@ -156,7 +156,7 @@ class OpenGLViewer(QOpenGLWidget):
         self._cached_proj = np.array(proj, dtype=np.float64).reshape((4, 4), order='F')
         self._cached_vp = np.array(vp, dtype=np.int32)
 
-        # Eksenler (+ etiketler)
+        # Axes (+ labels)
         self._draw_axes()
 
         # Mesh
@@ -165,7 +165,7 @@ class OpenGLViewer(QOpenGLWidget):
             F = self.faces.astype(np.uint32, copy=False).ravel()
             N = self.normals_v.astype(np.float32, copy=False) if self.normals_v is not None else None
 
-            # ---- Doldurma (transparan) ----
+            # ---- Solid fill (transparent) ----
             glEnable(GL_LIGHTING)
             glColor4f(self.base_color[0], self.base_color[1], self.base_color[2], self.mesh_alpha)
 
@@ -181,7 +181,7 @@ class OpenGLViewer(QOpenGLWidget):
                 glDisableClientState(GL_NORMAL_ARRAY)
             glDisableClientState(GL_VERTEX_ARRAY)
 
-            # ---- Tel-kafes overlay ----
+            # ---- Wireframe overlay ----
             if self.show_edges:
                 glDisable(GL_LIGHTING)
                 glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
@@ -193,7 +193,7 @@ class OpenGLViewer(QOpenGLWidget):
                 glDisableClientState(GL_VERTEX_ARRAY)
                 glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
 
-        # Kesit polylineleri
+        # Section polylines
         if self._section_paths:
             glDisable(GL_LIGHTING)
             glColor3f(1.0, 1.0, 0.0)
@@ -210,7 +210,7 @@ class OpenGLViewer(QOpenGLWidget):
                     glVertex3f(float(p[0]), float(p[1]), float(p[2]))
                 glEnd()
 
-        # Seçili nokta (kırmızı artı)
+        # Selected point (orange cross)
         if self._picked is not None:
             px, py, pz = map(float, self._picked)
             glDisable(GL_LIGHTING)
@@ -293,19 +293,19 @@ class OpenGLViewer(QOpenGLWidget):
         return (N / lens).astype(np.float32)
 
     def _draw_axes(self):
-        # Eksen çizgileri
+        # Axis lines
         glDisable(GL_LIGHTING)
         glLineWidth(2.0)
         glBegin(GL_LINES)
-        # X (kırmızı)
+        # X (red)
         glColor3f(1.0, 0.0, 0.0); glVertex3f(-2.0, 0.0, 0.0); glVertex3f(2.0, 0.0, 0.0)
-        # Y (yeşil)
+        # Y (green)
         glColor3f(0.0, 1.0, 0.0); glVertex3f(0.0, -2.0, 0.0); glVertex3f(0.0, 2.0, 0.0)
-        # Z (mavi)
+        # Z (blue)
         glColor3f(0.0, 0.0, 1.0); glVertex3f(0.0, 0.0, -2.0); glVertex3f(0.0, 0.0, 2.0)
         glEnd()
 
-        # Uçlara eksen etiketleri (eksene uygun renkler)
+        # Axis labels at endpoints (with matching colors)
         self._draw_text_3d(2.15, 0.0, 0.0, "X", (1.0, 0.0, 0.0))
         self._draw_text_3d(0.0, 2.15, 0.0, "Y", (0.0, 1.0, 0.0))
         self._draw_text_3d(0.0, 0.0, 2.15, "Z", (0.0, 0.0, 1.0))
@@ -320,7 +320,7 @@ class OpenGLViewer(QOpenGLWidget):
             return None, None
         # normalize window coords
         wx, wy = float(mx), float(my)
-        # near ve far noktalarını dünya uzayına aç
+        # project near and far points into world space
         near = gluUnProject(wx, wy, 0.0, MV, P, vp)
         far = gluUnProject(wx, wy, 1.0, MV, P, vp)
         if near is None or far is None:
@@ -334,17 +334,17 @@ class OpenGLViewer(QOpenGLWidget):
 
     # ---------- Helpers ----------
     def _draw_text_3d(self, x, y, z, text, color=(1.0, 1.0, 1.0)):
-        """3B uzayda tek satır yazı (eksene uygun renkte, state izolasyonlu)."""
+        """Single-line text in 3D space (colored according to axis, with isolated state)."""
         try:
             from OpenGL.GLUT import glutBitmapCharacter, GLUT_BITMAP_HELVETICA_18
         except Exception:
-            return  # GLUT yoksa sessizce atla
+            return  # silently skip if GLUT not available
 
-        # Mevcut enable/disable bayraklarını koru
+        # Preserve current enable/disable flags
         glPushAttrib(GL_ENABLE_BIT)
         try:
-            glDisable(GL_LIGHTING)     # yazı için düz renk
-            glDisable(GL_DEPTH_TEST)   # her zaman görünür olsun (istersen bunu kaldırabilirsin)
+            glDisable(GL_LIGHTING)     # flat color for text
+            glDisable(GL_DEPTH_TEST)   # always visible (you can remove this if desired)
             glColor3f(*color)
             glRasterPos3f(x, y, z)
 
